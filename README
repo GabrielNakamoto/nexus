@@ -1,0 +1,9 @@
+# nexus
+
+minimal FRC driver station CLI for Linux
+1 file, ~150 lines, 0 dependencies 
+talks to robot and handles controller I/O
+
+simply run: `nexus <team number>`
+
+p.s. I hate microsoft
