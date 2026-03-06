@@ -1,4 +1,5 @@
 import curses, socket, time, threading, struct, fcntl
+import sys
 from dataclasses import dataclass
 from enum import Enum
 
@@ -11,11 +12,8 @@ DS_SEND_PORT, DS_RECV_PORT = 1110, 1150
 SEND_INTERVAL = 0.05  # 20Hz
 UI_REFRESH = 0.016    # ~60fps
 
-class Mode(Enum):
-    TeleOp = 0x00; TestMode = 0x01; Autonomous = 0x02
-
-class Request(Enum):
-    Unconnected = 0x00; RestartCode = 0x04; RebootRoboRIO = 0x08; Normal = 0x80
+class Mode(Enum):       TeleOp = 0x00; TestMode = 0x01; Autonomous = 0x02
+class Request(Enum):    Unconnected = 0x00; RestartCode = 0x04; RebootRoboRIO = 0x08; Normal = 0x80
 
 @dataclass(slots=True)
 class StatePacket:
@@ -31,8 +29,6 @@ def control_packet(num: int, mode: Mode, enabled: bool, request: Request) -> byt
     return struct.pack('>HBBBB', num, 0x01, mode.value | (0x04 if enabled else 0), request.value, 0)
 
 class Joystick:
-    __slots__ = ('mu', 'connected', 'file', 'num_axes', 'num_buttons', 'axes', 'buttons')
-
     def __init__(self, dev: str = '/dev/input/js0'):
         self.mu = threading.Lock()
         self.file, self.connected = None, False
@@ -47,23 +43,12 @@ class Joystick:
             self.axes, self.buttons = [0.0] * self.num_axes, [0] * self.num_buttons
             self.connected = True
             threading.Thread(target=self._read_loop, daemon=True).start()
-        except (FileNotFoundError, OSError):
-            pass
-
-    def _read_loop(self) -> None:
-        while self.file:
-            _, val, typ, num = struct.unpack('IhBB', self.file.read(8))
-            with self.mu:
-                if typ & 1 and num < self.num_buttons: self.buttons[num] = val
-                if typ & 2 and num < self.num_axes: self.axes[num] = val / AXIS_MAX
+        except (FileNotFoundError, OSError): pass
 
     def get_state(self) -> tuple[list[float], list[int]]:
-        with self.mu:
-            return list(self.axes), list(self.buttons)
-
+        with self.mu: return list(self.axes), list(self.buttons)
     def get_packet(self) -> bytes:
-        if not self.connected:
-            return bytes([3, 0x0c, 0, 0, 0])
+        if not self.connected: return bytes([3, 0x0c, 0, 0, 0])
         with self.mu:
             axis_bytes = bytes(int(max(-128, min(127, a * 127))) & 0xFF for a in self.axes)
             btn_bytes = bytearray((self.num_buttons + 7) // 8)
@@ -72,9 +57,16 @@ class Joystick:
             payload = bytes([self.num_axes]) + axis_bytes + bytes([self.num_buttons]) + btn_bytes + b'\x00'
             return bytes([len(payload) + 1, 0x0c]) + payload
 
-class Nexus:
-    __slots__ = ('js', 'robot_ip', 'mu', 'send_sock', 'recv_sock', 'packet_num', 'running', 'last_state', 'request', 'enabled', 'mode')
+    def _read_loop(self) -> None:
+        while True:
+            if self.file:
+                _, val, typ, num = struct.unpack('IhBB', self.file.read(8))
+                with self.mu:
+                    if typ & 1 and num < self.num_buttons: self.buttons[num] = val
+                    if typ & 2 and num < self.num_axes: self.axes[num] = val / AXIS_MAX
+        # if self.file: self.file.close()
 
+class Nexus:
     def __init__(self, team_number: int):
         self.js = Joystick()
         self.robot_ip = f"roboRIO-{team_number}-FRC.local"
@@ -82,49 +74,47 @@ class Nexus:
         self.send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.recv_sock.bind(("", DS_RECV_PORT))
+        self.recv_sock.settimeout(0.05)
         self.packet_num, self.running = 0, False
         self.last_state: StatePacket | None = None
         self.request, self.enabled, self.mode = Request.Normal, False, Mode.TeleOp
+        self.th1 = threading.Thread(target=self._recv_loop, daemon=True)
+        self.th2 = threading.Thread(target=self._send_loop, daemon=True)
+        self.th1.start(); self.th2.start()
 
-    def start(self) -> None:
-        self.running = True
-        threading.Thread(target=self._recv_loop, daemon=True).start()
-        threading.Thread(target=self._send_loop, daemon=True).start()
+    def stop(self) -> None:
+        try: self.send_sock.sendto(control_packet(self.packet_num, self.mode, False, Request.Normal), (self.robot_ip, DS_SEND_PORT))
+        except (socket.error, OSError): pass
 
     def set_mode(self, mode: Mode) -> None: self.mode = mode
     def toggle_enable(self) -> None: self.enabled = not self.enabled
     def send_request(self, request: Request) -> None: self.request = request
-
     def get_state(self) -> StatePacket | None:
-        with self.mu:
-            return self.last_state
+        with self.mu: return self.last_state
 
     def _recv_loop(self) -> None:
-        while self.running:
-            data, _ = self.recv_sock.recvfrom(1024)
-            with self.mu:
-                self.last_state = StatePacket.from_bytes(data)
-
+        while True:
+            try:
+                data, _ = self.recv_sock.recvfrom(1024)
+                with self.mu: self.last_state = StatePacket.from_bytes(data)
+            except socket.timeout: pass
     def _send_loop(self) -> None:
-        while self.running:
+        while True:
             try:
                 packet = control_packet(self.packet_num, self.mode, self.enabled, self.request) + self.js.get_packet()
                 self.send_sock.sendto(packet, (self.robot_ip, DS_SEND_PORT))
                 self.request, self.packet_num = Request.Normal, self.packet_num + 1
-            except (socket.error, OSError):
-                pass
+            except (socket.error, OSError): pass
             time.sleep(SEND_INTERVAL)
 
 class UI:
-    __slots__ = ('net', 'keybinds')
-
     def __init__(self, net: Nexus):
         self.net = net
         self.keybinds = {
-            ord('e'): ('enable', net.toggle_enable),
-            ord('a'): ('auto', lambda: net.set_mode(Mode.Autonomous)),
-            ord('t'): ('teleop', lambda: net.set_mode(Mode.TeleOp)),
-            ord('r'): ('restart', lambda: net.send_request(Request.RestartCode)),
+            ord('e'): ('enable',    net.toggle_enable),
+            ord('a'): ('auto',      lambda: net.set_mode(Mode.Autonomous)),
+            ord('t'): ('teleop',    lambda: net.set_mode(Mode.TeleOp)),
+            ord('r'): ('restart',   lambda: net.send_request(Request.RestartCode)),
         }
 
     def __call__(self, win: curses.window) -> None:
@@ -143,9 +133,13 @@ class UI:
                 win.addstr(3, 0, "Joystick: NOT CONNECTED")
             win.refresh()
             if ch in self.keybinds: self.keybinds[ch][1]()
+            if ch == 10: self.net.toggle_enable()
             time.sleep(UI_REFRESH)
 
 if __name__ == '__main__':
-    net = Nexus(4152)
-    net.start()
-    curses.wrapper(UI(net))
+    if len(sys.argv) == 1:
+        print("Usage: nexus <team number>")
+        exit(1)
+    net = Nexus(int(sys.argv[1]))
+    try: curses.wrapper(UI(net))
+    finally: net.stop()
