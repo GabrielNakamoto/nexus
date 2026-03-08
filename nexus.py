@@ -75,9 +75,10 @@ class Joystick:
             remapped_axes = [0.0] * len(self.axes)
             for i in range(len(self.axes)): remapped_axes[AXIS_REMAP[i] if i in AXIS_REMAP else i]=self.axes[i]
             axis_bytes = bytes(int(max(-128, min(127, a * 127))) & 0xFF for a in remapped_axes)
-            btn_bytes = bytearray((self.num_buttons + 7) // 8)
-            for i, pressed in enumerate(self.buttons):
-                if pressed: btn_bytes[i // 8] |= 1 << (i % 8)
+            # Build button_flags as integer (LSB = button 0), then send big-endian
+            button_flags = sum(1 << i for i, pressed in enumerate(self.buttons) if pressed)
+            num_btn_bytes = (self.num_buttons + 7) // 8
+            btn_bytes = button_flags.to_bytes(num_btn_bytes, 'big')
             # Format: axes_count, axes..., buttons_count, buttons..., pov_count (0 for now)
             payload = bytes([self.num_axes]) + axis_bytes + bytes([self.num_buttons]) + btn_bytes + b'\x00'
             return bytes([len(payload) + 1, 0x0c]) + payload
