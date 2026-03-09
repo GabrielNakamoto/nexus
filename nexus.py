@@ -9,8 +9,8 @@ AXIS_REMAP = (0, 1, 2, 4, 5, 3)  # Swap axes 3,4,5 -> 4,5,3
 class Mode:    TELEOP, TEST, AUTO = 0x00, 0x01, 0x02
 class Request: NORMAL, RESTART, REBOOT = 0x00, 0x04, 0x08
 
-def ctrl_packet(num, mode, enabled, req=0): 
-    return struct.pack('>HBBBB', num, 0x01, mode | (0x04 if enabled else 0), req, 0)
+def ctrl_packet(num, mode, enabled, estopped=False, req=0): 
+    return struct.pack('>HBBBB', num, 0x01, mode | (0x04 if enabled else 0) | (0x80 if estopped else 0), req, 0)
 
 def datetime_tags():
     now = datetime.now(timezone.utc)
@@ -80,12 +80,12 @@ class Nexus:
         self._ip, self._dns_retry, self.mu = None, 0, threading.Lock()
         self.send_sock, self.recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM), socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.recv_sock.bind(("", DS_RECV_PORT))
-        self.pkt_num, self.state, self.request, self.enabled, self.mode = 0, None, Request.NORMAL, False, Mode.TELEOP
+        self.pkt_num, self.state, self.request, self.enabled, self.estopped, self.mode = 0, None, Request.NORMAL, False, False, Mode.TELEOP
         self._sent_dt = False
         threading.Thread(target=self._recv, daemon=True).start()
         threading.Thread(target=self._send, daemon=True).start()
 
-    def estop(self): self.enabled = False
+    def estop(self): self.estopped = True
 
     def _recv(self):
         self.recv_sock.settimeout(0.1)
@@ -104,7 +104,7 @@ class Nexus:
                 except socket.gaierror: self._dns_retry = time.time() + 2
             if self._ip:
                 try:
-                    pkt = ctrl_packet(self.pkt_num, self.mode, self.enabled, self.request)
+                    pkt = ctrl_packet(self.pkt_num, self.mode, self.enabled, self.estopped, self.request)
                     if not self._sent_dt:
                         pkt += datetime_tags()
                         with self.mu:
@@ -117,7 +117,7 @@ class Nexus:
 
     def stop(self):
         if self.state and self._ip:
-            try: self.send_sock.sendto(ctrl_packet(self.pkt_num, self.mode, False), (self._ip, DS_SEND_PORT))
+            try: self.send_sock.sendto(ctrl_packet(self.pkt_num, self.mode, False, self.estopped), (self._ip, DS_SEND_PORT))
             except OSError: pass
 
 def ui(win, net):
@@ -133,7 +133,8 @@ def ui(win, net):
         conn, code, v = bool(s), s and s[0], s[1] if s else 0
         win.erase()
         win.addstr(0, 0, "      --- Nexus Robot Connection ---", curses.A_BOLD)
-        win.addstr(1, 0, f"[{'CONN' if conn else 'DISC'}] [{'CODE' if code else 'NO CODE'}] {'AUTO' if net.mode == Mode.AUTO else 'TELEOP'} | {'EN' if net.enabled else 'DIS'}")
+        status = 'ESTOP' if net.estopped else ('EN' if net.enabled else 'DIS')
+        win.addstr(1, 0, f"[{'CONN' if conn else 'DISC'}] [{'CODE' if code else 'NO CODE'}] {'AUTO' if net.mode == Mode.AUTO else 'TELEOP'} | {status}")
         win.addstr(2, 0, f"Battery: [{'█' * int(v / 14 * 20)}{'░' * (20 - int(v / 14 * 20))}] {v:.1f}V")
         win.addstr(3, 0, ' '.join(f"{k}:{v[0]}" for k, v in keys.items()) + " q:quit")
         flash = time.time() - net.kb.triggered < 1.0
