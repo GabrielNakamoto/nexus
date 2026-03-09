@@ -155,18 +155,20 @@ class UI:
         curses.curs_set(0); win.nodelay(True)
         while (ch := win.getch()) != ord('q'):
             s = self.net.get_state()
-            status = f"[{'CONN' if s else 'DISC'}] [{'CODE' if s and s.code_running else 'NO CODE'}] {s.bat_voltage if s else 0:.1f}V | {self.net.mode.name} | {'EN' if self.net.enabled else 'DIS'}"
+            status = f"[{'CONN' if s else 'DISC'}] [{'CODE' if s and s.code_running else 'NO CODE'}] {self.net.mode.name} | {'EN' if self.net.enabled else 'DIS'}"
+            v = s.bat_voltage if s else 0; filled = int(v / 14 * 20)
             win.erase();
             win.addstr(0, 0, "      --- Nexus Robot Connection ---", curses.A_BOLD)
             win.addstr(1, 0, status)
-            win.addstr(2, 0, ' '.join(f"{chr(k)}:{v[0]}" for k, v in self.keybinds.items()) + " q:quit")
+            win.addstr(2, 0, f"Battery: [{'█' * filled}{'░' * (20 - filled)}] {v:.1f}V")
+            win.addstr(3, 0, ' '.join(f"{chr(k)}:{v[0]}" for k, v in self.keybinds.items()) + " q:quit")
             js = self.net.js
             if js.connected:
                 axes, buttons = js.get_state()
-                win.addstr(4, 0, f"Axes:  {' '.join(f'{a:+.2f}' for a in axes[:6])}")
-                win.addstr(5, 0, f"Btns:  {''.join('●' if b else '○' for b in buttons)}")
+                win.addstr(5, 0, f"Axes:  {' '.join(f'{a:+.2f}' for a in axes[:6])}")
+                win.addstr(6, 0, f"Btns:  {''.join('●' if b else '○' for b in buttons)}")
             else:
-                win.addstr(4, 0, "Joystick: NOT CONNECTED")
+                win.addstr(5, 0, "Joystick: NOT CONNECTED")
             win.refresh()
             if ch in self.keybinds: self.keybinds[ch][1]()
             if ch == 10: self.net.enabled = False
