@@ -2,10 +2,13 @@
 
 > minimal FRC driver station CLI for Linux
 
+> now with background E-stop support for all the haters
+
 simply run: `python3 nexus <team number>`
 
+
 - 1 file
-- ~200 lines
+- ~150 lines
 - 0 dependencies
 - a hint of vibe coding
 - semi-functional controller I/O
