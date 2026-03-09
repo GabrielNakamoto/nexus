@@ -4,7 +4,7 @@
 
 > now with background E-stop support for all the haters
 
-simply run: `python3 nexus <team number>`
+simply run: `sudo python3 nexus <team number>`
 
 
 - 1 file
