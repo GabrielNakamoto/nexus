@@ -2,7 +2,7 @@
 
 > minimal FRC driver station CLI for Linux
 
-> now battle tested over ~50 injury free hours of development!
+> now battle tested over ~50 injury free hours connected to robot!
 
 simply run: `python3 nexus <team number>`
 
