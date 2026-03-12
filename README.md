@@ -2,6 +2,8 @@
 
 > minimal FRC driver station CLI for Linux
 
+> now battle tested over ~50 injury free hours of development!
+
 simply run: `python3 nexus <team number>`
 
 - 1 file
